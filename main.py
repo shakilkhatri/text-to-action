@@ -24,7 +24,7 @@ class NaturalLanguageCodeTool:
         self.log_dir = 'logs'
         os.makedirs(self.log_dir, exist_ok=True)
 
-    def execute_code(self, code: str, command: str) -> Tuple[bool, str]:
+    def execute_code(self, code: str, command: str, cost_details: Optional[dict]) -> Tuple[bool, str]:
         """Executes code with safety checks and proper output capture"""
         if self.isSafetyCheckEnabled and not self._validate_code_safety(code):
             return False, "Code blocked by safety checks"
@@ -61,10 +61,10 @@ class NaturalLanguageCodeTool:
         except Exception as e:
             log_data['error'] = f"Execution failed: {str(e)}"
         finally:
-            if temp_file_path:
+            if 'temp_file_path' in locals() and temp_file_path and os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-        self._save_execution_log(log_data)
+        self._save_execution_log(log_data, cost_details)
         return log_data['success'], log_data['output'] or log_data['error']
 
     def _generate_safe_wrapper(self, code: str) -> str:
@@ -108,7 +108,7 @@ finally:
             return confirmation == 'y'
         return True
 
-    def _save_execution_log(self, log_data: dict):
+    def _save_execution_log(self, log_data: dict, cost_details: Optional[dict]):
         """Save structured execution logs"""
         log_file = os.path.join(self.log_dir, 
                                f"log_{log_data['timestamp']}.log")
@@ -116,6 +116,12 @@ finally:
             f.write(f"COMMAND: {log_data['command']}\n")
             f.write(f"TIMESTAMP: {log_data['timestamp']}\n")
             f.write(f"SUCCESS: {log_data['success']}\n")
+
+            if cost_details:
+                f.write("\n=== COST ===\n")
+                for key, value in cost_details.items():
+                    f.write(f"{key.replace('_', ' ').title()}: {value}\n")
+
             f.write("\n=== GENERATED CODE ===\n")
             f.write(log_data['code'] + '\n')
             f.write("\n=== OUTPUT ===\n")
@@ -123,18 +129,43 @@ finally:
             f.write("\n=== ERRORS ===\n")
             f.write(log_data['error'] + '\n')
 
+    def calculate_cost(self, prompt_tokens: int, completion_tokens: int, input_cost_per_million: float, output_cost_per_million: float) -> dict:
+        """Calculates the cost of a request."""
+        input_cost_usd = (prompt_tokens * input_cost_per_million) / 1_000_000
+        output_cost_usd = (completion_tokens * output_cost_per_million) / 1_000_000
+        total_cost_usd = input_cost_usd + output_cost_usd
+        
+        conversion_rate = 87.9  # 1 USD = 87.9 INR
+        total_cost_inr = total_cost_usd * conversion_rate
+        
+        cost_details = {
+            'prompt_tokens': prompt_tokens,
+            'completion_tokens': completion_tokens,
+            'input_cost_per_million_usd': input_cost_per_million,
+            'output_cost_per_million_usd': output_cost_per_million,
+            'input_cost_usd': input_cost_usd,
+            'output_cost_usd': output_cost_usd,
+            'total_cost_usd': total_cost_usd,
+            'total_cost_inr': total_cost_inr
+        }
+        
+        # Print to terminal
+        print(f"Cost of request: {total_cost_inr:.4f} INR")
+        
+        return cost_details
+
     def run(self, natural_language_command: str):
-        code = self.get_python_code(natural_language_command)
+        code, cost_details = self.get_python_code(natural_language_command)
         stop_animation.set()
         animation_thread.join()
         if code:
-            success, output = self.execute_code(code, natural_language_command)
+            success, output = self.execute_code(code, natural_language_command, cost_details)
             if success:
                 print(f"Success: {output}")
             else:
                 print(f"Error: {output}")
 
-    def get_python_code(self, command: str) -> Optional[str]:
+    def get_python_code(self, command: str) -> Tuple[Optional[str], Optional[dict]]:
         """Get generated code with improved prompt"""
         improved_prompt = f"""Convert this natural language command to Python code following these rules:
 1. Output ONLY the code wrapped in ```python markers
@@ -159,7 +190,7 @@ Command: {command}"""
             'Authorization': f'Bearer {self.api_key}',
         }
         data = {
-            'model': 'gpt-4o',
+            'model': 'gpt-4.1-mini',
             'messages': [{
                 'role': 'system',
                 'content': 'You are a Python expert that generates safe, production-quality code.'
@@ -174,11 +205,29 @@ Command: {command}"""
         try:
             response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
             response.raise_for_status()
-            content = response.json()['choices'][0]['message']['content']
-            return self._extract_code_block(content)
+            response_json = response.json()
+            content = response_json['choices'][0]['message']['content']
+            
+            cost_details = None
+            if 'usage' in response_json:
+                usage = response_json['usage']
+                prompt_tokens = usage.get('prompt_tokens', 0)
+                completion_tokens = usage.get('completion_tokens', 0)
+                
+                input_cost_per_million = 0.150 
+                output_cost_per_million = 0.600
+                
+                cost_details = self.calculate_cost(
+                    prompt_tokens,
+                    completion_tokens,
+                    input_cost_per_million,
+                    output_cost_per_million
+                )
+
+            return self._extract_code_block(content), cost_details
         except Exception as e:
             print(f"API Error: {str(e)}")
-            return None
+            return None, None
 
     def _extract_code_block(self, content: str) -> Optional[str]:
         """Extract code from markdown code blocks"""
