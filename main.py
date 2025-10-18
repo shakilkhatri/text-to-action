@@ -22,7 +22,6 @@ class NaturalLanguageCodeTool:
         }
         self.isSafetyCheckEnabled = True
         self.log_dir = 'logs'
-        os.makedirs(self.log_dir, exist_ok=True)
 
     def execute_code(self, code: str, command: str, cost_details: Optional[dict]) -> Tuple[bool, str]:
         """Executes code with safety checks and proper output capture"""
@@ -110,6 +109,7 @@ finally:
 
     def _save_execution_log(self, log_data: dict, cost_details: Optional[dict]):
         """Save structured execution logs"""
+        os.makedirs(self.log_dir, exist_ok=True)
         log_file = os.path.join(self.log_dir, 
                                f"log_{log_data['timestamp']}.log")
         with open(log_file, 'w') as f:
@@ -176,7 +176,7 @@ finally:
    - Handle exceptions properly
    - Prefer built-in libraries over external APIs
    - Use webbrowser for URLs instead of direct requests
-   - For web scraping: use requests + BeautifulSoup (assume installed)
+   - For web scraping: use requests + BeautifulSoup (assume installed) [Try mimicking a real browser request]
 5. Add progress indicators for long operations
 6. Show desktop notifications using plyer for UI interactions
 7. If user asks a general knowledge question and you know the correct answer, just print the answer. If the answer REALLY requires latest info, you can use the browser.
